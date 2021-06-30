@@ -2,8 +2,9 @@ import asyncio
 import logging
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
-from decimal import ROUND_UP, Decimal
+from decimal import Decimal
 from fractions import Fraction
+from random import uniform
 from typing import DefaultDict, Dict, Mapping, NoReturn, Set
 
 from .api import AddrT, Api, Transaction
@@ -124,7 +125,7 @@ def disburse_task(
             # likely leaves a much clearer picture around what's left. Collecting a fee
             # might present a disincentive for this kind of attack. I'm not sure it
             # would eliminate it, though.
-            now = datetime.now(tz=timezone.utc)
+            now = api.now()
 
             if (
                 len(unpaid_receipts) >= min_distinct_receiver_addrs
@@ -139,14 +140,14 @@ def disburse_task(
                     # We could introduce some randomization or jitter here in an attempt
                     # to obfuscate things, but I would hope that's beyond the scope of
                     # this already ridiculously cumbersome exercise
-                    rounded_split = Fraction(
-                        (
-                            Decimal(split.numerator) / Decimal(split.denominator)
-                        ).quantize(Decimal("0.01"), rounding=ROUND_UP)
-                    )
+                    base_value = Decimal(split.numerator) / Decimal(split.denominator)
 
-                    for wthd_addr in wthd_addrs:
-                        if balance_owed >= rounded_split:
+                    for i, wthd_addr in enumerate(wthd_addrs):
+                        if i < len(wthd_addrs) - 1:
+                            jitter_value = base_value * Decimal(uniform(0.9, 1.1))
+                            rounded_split = Fraction(
+                                jitter_value.quantize(Decimal("0.01"))
+                            )
                             await api.post_transfer(
                                 house_addr, wthd_addr, rounded_split
                             )

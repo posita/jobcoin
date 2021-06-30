@@ -1,15 +1,15 @@
 from typing import List, cast
 
 import pytest
-from aiohttp.test_utils import TestClient, TestServer
+from aiohttp.test_utils import TestServer
 
 from ..jobcoin.api import (
     RawCreateTransactionT,
     RawTransactionT,
     RawTransferTransactionT,
 )
-from .utils import fake_client  # noqa: F401 # pylint: disable=unused-import
-from .utils import FakeDb, InsufficientFundsError
+from .utils import loop  # noqa: F401 # pylint: disable=unused-import
+from .utils import FakeDb, InsufficientFundsError, fake_client
 
 
 def test_fake_db() -> None:
@@ -74,23 +74,24 @@ def test_fake_db() -> None:
 
 
 async def test_fake_transactions(
-    fake_client: TestClient,  # noqa: F811 # pylint: disable=redefined-outer-name
+    aiohttp_client,
 ) -> None:
-    fake_db: FakeDb = cast(TestServer, fake_client.server).app["fake_db"]
+    client = await fake_client(aiohttp_client)
+    fake_db: FakeDb = cast(TestServer, client.server).app["fake_db"]
     assert len(fake_db.transactions) == 0
 
-    resp = await fake_client.get("/transactions")
+    resp = await client.get("/transactions")
     assert resp.status == 200
     data = await resp.json()
     assert data == []
 
-    resp = await fake_client.post(
+    resp = await client.post(
         "/transactions", json={"toAddress": "BobsAddress", "amount": "10"}
     )
     assert resp.status == 200
     assert len(fake_db.transactions) == 1
 
-    resp = await fake_client.get("/transactions")
+    resp = await client.get("/transactions")
     assert resp.status == 200
     data = await resp.json()
     assert len(data) == 1
@@ -101,9 +102,10 @@ async def test_fake_transactions(
 
 
 async def test_fake_transactions_insufficient_funds(
-    fake_client: TestClient,  # noqa: F811 # pylint: disable=redefined-outer-name
+    aiohttp_client,
 ) -> None:
-    resp = await fake_client.post(
+    client = await fake_client(aiohttp_client)
+    resp = await client.post(
         "/transactions",
         json={
             "toAddress": "AlicesAddress",
@@ -112,30 +114,31 @@ async def test_fake_transactions_insufficient_funds(
         },
     )
     assert resp.status == 422
-    fake_db: FakeDb = cast(TestServer, fake_client.server).app["fake_db"]
+    fake_db: FakeDb = cast(TestServer, client.server).app["fake_db"]
     assert fake_db.transactions == []
 
 
 async def test_fake_addresses(
-    fake_client: TestClient,  # noqa: F811 # pylint: disable=redefined-outer-name
+    aiohttp_client,
 ) -> None:
-    fake_db: FakeDb = cast(TestServer, fake_client.server).app["fake_db"]
+    client = await fake_client(aiohttp_client)
+    fake_db: FakeDb = cast(TestServer, client.server).app["fake_db"]
     assert len(fake_db.addresses) == 0
     assert len(fake_db.transactions) == 0
 
-    resp = await fake_client.get("/addresses/BobsAddress")
+    resp = await client.get("/addresses/BobsAddress")
     assert resp.status == 200
     data = await resp.json()
     assert data == {"balance": "0", "transactions": []}
 
-    resp = await fake_client.post(
+    resp = await client.post(
         "/transactions", json={"toAddress": "BobsAddress", "amount": "10"}
     )
     assert resp.status == 200
     assert len(fake_db.addresses) == 1
     assert len(fake_db.transactions) == 1
 
-    resp = await fake_client.get("/addresses/BobsAddress")
+    resp = await client.get("/addresses/BobsAddress")
     assert resp.status == 200
     data = await resp.json()
     assert data["balance"] == "10"

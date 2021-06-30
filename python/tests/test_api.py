@@ -3,11 +3,8 @@ from fractions import Fraction
 from typing import List, cast
 
 import pytest
-from aiohttp import ClientSession
-from aiohttp.test_utils import TestClient
 
 from ..jobcoin.api import (
-    Api,
     Balance,
     InsufficientFundsError,
     RawBalanceT,
@@ -19,8 +16,8 @@ from ..jobcoin.api import (
     iso2str,
     str2iso,
 )
-from .utils import fake_client  # noqa: F401 # pylint: disable=unused-import
-from .utils import TestConfig
+from .utils import loop  # noqa: F401 # pylint: disable=unused-import
+from .utils import test_api
 
 
 def test_frac2str() -> None:
@@ -119,9 +116,9 @@ def test_transaction() -> None:
 
 
 async def test_api_balances(
-    fake_client: TestClient,  # noqa: F811 # pylint: disable=redefined-outer-name
+    aiohttp_client,
 ) -> None:
-    api = Api(cast(ClientSession, fake_client), TestConfig())
+    api = await test_api(aiohttp_client)
 
     bob_balance = await api.get_balance_for_address("BobsAddress")
     assert bob_balance.balance == Fraction(0)
@@ -131,7 +128,7 @@ async def test_api_balances(
     assert alice_balance.balance == Fraction(0)
     assert len(alice_balance.transactions) == 0
 
-    resp = await fake_client.post(
+    resp = await api.client.post(
         "/transactions", json={"toAddress": "BobsAddress", "amount": "10"}
     )
     assert resp.status == 200
@@ -156,13 +153,13 @@ async def test_api_balances(
 
 
 async def test_api_transactions(
-    fake_client: TestClient,  # noqa: F811 # pylint: disable=redefined-outer-name
+    aiohttp_client,
 ) -> None:
-    api = Api(cast(ClientSession, fake_client), TestConfig())
+    api = await test_api(aiohttp_client)
     transactions = await api.get_transactions()
     assert len(transactions) == 0
 
-    resp = await fake_client.post(
+    resp = await api.client.post(
         "/transactions", json={"toAddress": "BobsAddress", "amount": "10"}
     )
     assert resp.status == 200
@@ -184,9 +181,9 @@ async def test_api_transactions(
 
 
 async def test_api_transactions_insufficient_funds(
-    fake_client: TestClient,  # noqa: F811 # pylint: disable=redefined-outer-name
+    aiohttp_client,
 ) -> None:
-    api = Api(cast(ClientSession, fake_client), TestConfig())
+    api = await test_api(aiohttp_client)
     transactions = await api.get_transactions()
     assert len(transactions) == 0
 

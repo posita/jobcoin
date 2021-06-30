@@ -1,0 +1,3 @@
+[submodule "python/async-solipsism"]
+	path = python/async-solipsism
+	url = https://github.com/bmerry/async-solipsism.git

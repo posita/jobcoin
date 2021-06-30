@@ -1,14 +1,16 @@
-from asyncio import AbstractEventLoop
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from fractions import Fraction
 from typing import Dict, List, NamedTuple, cast
 
+import async_solipsism
 import pytest
-from aiohttp import web
+from aiohttp import ClientSession, web
 from aiohttp.test_utils import TestClient
 
 from ..jobcoin.api import (
     AddrT,
+    Api,
+    Config,
     InsufficientFundsError,
     RawBalanceT,
     RawTransactionT,
@@ -23,18 +25,30 @@ class TestConfig:
     API_TRANSACTIONS_URL = "/transactions"
 
 
-@pytest.fixture
-def fake_client(
-    loop: AbstractEventLoop,
-    aiohttp_client,
-) -> TestClient:
-    app = web.Application()
-    app["fake_db"] = FakeDb([], {})
-    app.router.add_get("/addresses/{addr}", fake_addresses)
-    app.router.add_get("/transactions", fake_transactions)
-    app.router.add_post("/transactions", fake_transactions)
+class TestApi(Api):
+    def __init__(
+        self,
+        client: TestClient,
+        config: Config = TestConfig(),
+    ):
+        super().__init__(cast(ClientSession, client), config)
+        self._created_at = super().now()
 
-    return loop.run_until_complete(aiohttp_client(app))
+    def now(self) -> datetime:
+        client = cast(TestClient, self.client)
+
+        return self._created_at + timedelta(seconds=client.app.loop.time())
+
+
+@pytest.fixture
+def loop(mocker):
+    mocker.patch(
+        "aiohttp.test_utils.get_port_socket",
+        lambda host, port: async_solipsism.ListenSocket((host, port)),
+    )
+    as_loop = async_solipsism.EventLoop()
+    yield as_loop
+    as_loop.close()
 
 
 class FakeDb(NamedTuple):
@@ -81,6 +95,19 @@ class FakeDb(NamedTuple):
                 }
 
 
+async def fake_client(
+    aiohttp_client,
+) -> TestClient:
+    app = web.Application()
+    app["fake_db"] = FakeDb([], {})
+    app.router.add_get("/addresses/{addr}", fake_addresses)
+    app.router.add_get("/transactions", fake_transactions)
+    app.router.add_post("/transactions", fake_transactions)
+    client = await aiohttp_client(app, server_kwargs={"port": 80})
+
+    return client
+
+
 async def fake_transactions(request: web.Request):
     assert "fake_db" in request.app
     fake_db: FakeDb = request.app["fake_db"]
@@ -113,3 +140,11 @@ async def fake_addresses(request: web.Request):
     )
 
     return web.json_response(raw_balance)
+
+
+async def test_api(
+    aiohttp_client,
+) -> Api:
+    client = await fake_client(aiohttp_client)
+
+    return TestApi(client)

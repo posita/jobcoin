@@ -1,23 +1,13 @@
 import asyncio
-from datetime import timedelta
 from fractions import Fraction
-from typing import Mapping, Set, cast
+from typing import Mapping, Set
 
 import pytest
-from aiohttp import ClientSession
-from aiohttp.test_utils import TestClient
 
-from ..jobcoin.api import AddrT, Api
+from ..jobcoin.api import AddrT
 from ..jobcoin.jobcoin import disburse_task, gather_deposits_task
-from .utils import fake_client  # noqa: F401 # pylint: disable=unused-import
-from .utils import TestConfig
-
-
-@pytest.fixture
-def api(
-    fake_client: TestClient,  # noqa: F811 # pylint: disable=redefined-outer-name
-) -> Api:
-    return Api(cast(ClientSession, fake_client), TestConfig())
+from .utils import loop  # noqa: F401 # pylint: disable=unused-import
+from .utils import test_api
 
 
 @pytest.fixture
@@ -47,8 +37,10 @@ def recv_addr_to_wthd_addrs() -> Mapping[AddrT, Set[AddrT]]:
 
 
 async def test_simple_gather_deposits(
-    api: Api,  # noqa: F811 # pylint: disable=redefined-outer-name
+    aiohttp_client,
 ) -> None:
+    api = await test_api(aiohttp_client)
+
     src_addr = "src-test"
     resp = await api.client.post(
         "/transactions", json={"toAddress": src_addr, "amount": "20"}
@@ -57,15 +49,14 @@ async def test_simple_gather_deposits(
 
     recv_addr = "recv-test"
     house_addr = "house-test"
-    task = gather_deposits_task(api, recv_addr, house_addr, poll_sec=0.0125)
+    task = gather_deposits_task(api, recv_addr, house_addr)
 
     for i in range(1, 5):
         src_balance = await api.get_balance_for_address(src_addr)
         assert src_balance.balance > 0
         transfer_amount = min(Fraction(5), src_balance.balance)
         await api.post_transfer(src_addr, recv_addr, transfer_amount)
-        await asyncio.sleep(0.2)
-
+        await asyncio.sleep(3 * 60.0)
         recv_balance = await api.get_balance_for_address(recv_addr)
         assert recv_balance.balance == 0
         assert len(recv_balance.transactions) == 2 * i
@@ -81,11 +72,13 @@ async def test_simple_gather_deposits(
 
 
 async def test_complete_disbursement(
-    api: Api,  # noqa: F811 # pylint: disable=redefined-outer-name
+    aiohttp_client,
     recv_addr_to_wthd_addrs: Mapping[
         AddrT, Set[AddrT]
     ],  # noqa: F811 # pylint: disable=redefined-outer-name
 ) -> None:
+    api = await test_api(aiohttp_client)
+
     src_addr = "src-test"
     resp = await api.client.post(
         "/transactions", json={"toAddress": src_addr, "amount": "30"}
@@ -98,7 +91,7 @@ async def test_complete_disbursement(
     tasks = []
 
     for recv_addr in recv_addr_to_wthd_addrs:
-        task = gather_deposits_task(api, recv_addr, house_addr, poll_sec=0.0125)
+        task = gather_deposits_task(api, recv_addr, house_addr)
         tasks.append(task)
 
     task = disburse_task(
@@ -106,19 +99,17 @@ async def test_complete_disbursement(
         house_addr,
         recv_addr_to_wthd_addrs,
         min_distinct_receiver_addrs=len(recv_addr_to_wthd_addrs),
-        min_transaction_age=timedelta(microseconds=100000),
-        poll_sec=0.0125,
     )
     tasks.append(task)
 
     for recv_addr in recv_addr_to_wthd_addrs:
         await api.post_transfer(src_addr, recv_addr, Fraction(10))
 
-    await asyncio.sleep(0.05)
+    await asyncio.sleep(3 * 60.0)
     house_balance = await api.get_balance_for_address(house_addr)
     assert house_balance.balance == 30
 
-    await asyncio.sleep(0.2)
+    await asyncio.sleep(61 * 60.0)
     house_balance = await api.get_balance_for_address(house_addr)
     assert house_balance.balance == 0
 
@@ -138,11 +129,13 @@ async def test_complete_disbursement(
 
 
 async def test_disbursement_meets_minimum_criteria(
-    api: Api,  # noqa: F811 # pylint: disable=redefined-outer-name
+    aiohttp_client,
     recv_addr_to_wthd_addrs: Mapping[
         AddrT, Set[AddrT]
     ],  # noqa: F811 # pylint: disable=redefined-outer-name
 ) -> None:
+    api = await test_api(aiohttp_client)
+
     src_addr = "src-test"
     resp = await api.client.post(
         "/transactions", json={"toAddress": src_addr, "amount": "30"}
@@ -155,7 +148,7 @@ async def test_disbursement_meets_minimum_criteria(
     tasks = []
 
     for recv_addr in recv_addr_to_wthd_addrs:
-        task = gather_deposits_task(api, recv_addr, house_addr, poll_sec=0.0125)
+        task = gather_deposits_task(api, recv_addr, house_addr)
         tasks.append(task)
 
     task = disburse_task(
@@ -163,8 +156,6 @@ async def test_disbursement_meets_minimum_criteria(
         house_addr,
         recv_addr_to_wthd_addrs,
         min_distinct_receiver_addrs=len(recv_addr_to_wthd_addrs),
-        min_transaction_age=timedelta(microseconds=100000),
-        poll_sec=0.0125,
     )
     tasks.append(task)
 
@@ -174,24 +165,24 @@ async def test_disbursement_meets_minimum_criteria(
     for recv_addr in recv_addrs[:-1]:
         await api.post_transfer(src_addr, recv_addr, Fraction(10))
 
-    await asyncio.sleep(0.05)
+    await asyncio.sleep(3 * 60.0)
     house_balance = await api.get_balance_for_address(house_addr)
     assert house_balance.balance == 10 * (len(recv_addrs) - 1)
 
     # Wait until the last transaction meets the minimum age (still not good enough,
     # since we need another receiver)
-    await asyncio.sleep(0.2)
+    await asyncio.sleep(61 * 60.0)
     house_balance = await api.get_balance_for_address(house_addr)
     assert house_balance.balance == 10 * (len(recv_addrs) - 1)
 
     # Final transaction
     await api.post_transfer(src_addr, recv_addrs[-1], Fraction(10))
-    await asyncio.sleep(0.05)
+    await asyncio.sleep(3 * 60.0)
     house_balance = await api.get_balance_for_address(house_addr)
     assert house_balance.balance == 10 * len(recv_addrs)
 
     # Wait until the last transaction meets the minimum age
-    await asyncio.sleep(0.2)
+    await asyncio.sleep(61 * 60.0)
     house_balance = await api.get_balance_for_address(house_addr)
     assert house_balance.balance == 0
 
@@ -211,11 +202,13 @@ async def test_disbursement_meets_minimum_criteria(
 
 
 async def test_disbursus_interruptus(
-    api: Api,  # noqa: F811 # pylint: disable=redefined-outer-name
+    aiohttp_client,
     recv_addr_to_wthd_addrs: Mapping[
         AddrT, Set[AddrT]
     ],  # noqa: F811 # pylint: disable=redefined-outer-name
 ) -> None:
+    api = await test_api(aiohttp_client)
+
     src_addr = "src-test"
     resp = await api.client.post(
         "/transactions", json={"toAddress": src_addr, "amount": "60"}
@@ -228,7 +221,7 @@ async def test_disbursus_interruptus(
     gather_deposits_tasks = []
 
     for recv_addr in recv_addr_to_wthd_addrs:
-        task = gather_deposits_task(api, recv_addr, house_addr, poll_sec=0.0125)
+        task = gather_deposits_task(api, recv_addr, house_addr)
         gather_deposits_tasks.append(task)
 
     first_disburse_task = disburse_task(
@@ -236,14 +229,12 @@ async def test_disbursus_interruptus(
         house_addr,
         recv_addr_to_wthd_addrs,
         min_distinct_receiver_addrs=len(recv_addr_to_wthd_addrs),
-        min_transaction_age=timedelta(microseconds=10000),
-        poll_sec=0.0125,
     )
 
     for recv_addr in recv_addr_to_wthd_addrs:
         await api.post_transfer(src_addr, recv_addr, Fraction(10))
 
-    await asyncio.sleep(0.2)
+    await asyncio.sleep(63 * 60.0)
     house_balance = await api.get_balance_for_address(house_addr)
     assert house_balance.balance == 0
 
@@ -255,7 +246,7 @@ async def test_disbursus_interruptus(
     for recv_addr in recv_addr_to_wthd_addrs:
         await api.post_transfer(src_addr, recv_addr, Fraction(10))
 
-    await asyncio.sleep(0.2)
+    await asyncio.sleep(3 * 60.0)
     house_balance = await api.get_balance_for_address(house_addr)
     assert house_balance.balance == 30
 
@@ -265,11 +256,9 @@ async def test_disbursus_interruptus(
         house_addr,
         recv_addr_to_wthd_addrs,
         min_distinct_receiver_addrs=len(recv_addr_to_wthd_addrs),
-        min_transaction_age=timedelta(microseconds=10000),
-        poll_sec=0.0125,
     )
 
-    await asyncio.sleep(0.2)
+    await asyncio.sleep(61 * 60.0)
     house_balance = await api.get_balance_for_address(house_addr)
     assert house_balance.balance == 0
 

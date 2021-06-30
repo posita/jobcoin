@@ -1,6 +1,6 @@
 import re
 import urllib.parse
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from fractions import Fraction
 from typing import (
@@ -118,6 +118,11 @@ class Api:
     ):
         self.client = client
         self.config = config
+
+    def now(self) -> datetime:
+        # This is an odd place for this, but we need some way to replace the notion of
+        # "now" for reconciliation with a deterministic clock in testing
+        return datetime.now(tz=timezone.utc)
 
     async def get_balance_for_address(
         self,
